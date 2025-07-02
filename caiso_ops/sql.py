@@ -172,6 +172,43 @@ class AncillaryServicePricesRT(SqlQuery):
         self.first_date = first_date
         self.final_date = final_date
 
+class ContractedVolumes(SqlQuery):
+
+    def __init__(
+        self,
+        first_date: str,
+        final_date: str,
+        filt: Optional[AbstractFilter] = None,
+    ):
+        base = f"""
+        SELECT
+            *
+        FROM
+            iceberg.prod.caiso_index_volume_data AS contracted_vol
+        WHERE
+            contracted_vol.date >= DATE '{first_date}'
+            AND contracted_vol.date < DATE '{final_date}'
+        ORDER BY
+            contracted_vol.timestamp
+        """
+        super().__init__(base, filt)
+        self.first_date = first_date
+        self.final_date = final_date
+
+class CaisoGeneratorCapabilities(SqlQuery):
+
+    def __init__(
+        self,
+        filt: Optional[AbstractFilter] = None,
+    ):
+        base = """
+        SELECT
+            *
+        FROM
+            iceberg.prod.caiso_generator_capabilities
+        """
+        super().__init__(base, filt)
+
 class CaisoIndexCapacity(SqlQuery):
 
     def __init__(
@@ -394,6 +431,15 @@ def read_as_prices(
     else:
         raise ValueError(f"unrecognized market: '{market}'")
 
+def read_contracted_volumes(
+    first_date: str = "2025-01-01",
+    final_date: str = "",
+):
+    if not final_date:
+        from datetime import datetime
+        final_date = datetime.today().strftime("%Y-%m-%d")
+    return ContractedVolumes(first_date, final_date).pull()
+
 def read_energy_prices(
     first_date: str = "2025-01-01",
     final_date: str = "",
@@ -426,6 +472,9 @@ def read_generation(
         return RenewableGeneration(first_date, final_date).pull()
     else:
         raise NotImplementedError(f"unrecognized generation kind: '{kind}'")
+
+def read_generator_capabilities():
+    return CaisoGeneratorCapabilities().pull()
 
 def read_index_capacity(first_date: str = "2025-01-01", final_date: str = ""):
     if not final_date:

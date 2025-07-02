@@ -72,7 +72,7 @@ class DataFetcher(object):
         elif (
             self.source.exists()
             and self.source.is_dir()
-            and any(self.source.iterdir())
+            and any(filter_ds_store(self.source.iterdir()))
         ):
             # if it's an empty directory, control flow doesn't go here
             return self.read_local_data()
@@ -178,6 +178,46 @@ class AncillaryServicePriceFetcher(DataFetcher):
             .rename(columns={date: "timestamp"})
             .sort_values("timestamp")
         )
+
+class ContractedVolumeFetcher(DataFetcher):
+
+    def __init__(
+        self,
+        in_dir: str = "contracted_volumes",
+        out_file: str = "contracted_volumes.parquet",
+    ):
+        def puller(*args, **kwargs):
+            return sql.read_contracted_volumes(*args, **kwargs)
+        super().__init__(in_dir, out_file, sql_interface=puller)
+
+    def process(self, df: pd.DataFrame) -> pd.DataFrame:
+        # UTC -> California time; then strip tzinfo
+        date = "timestamp"
+        df[date] = df[date].dt.tz_convert("US/Pacific").dt.tz_localize(None)
+
+        to_drop = ["date", "period_length"]
+        return (
+            df
+            .drop(columns=to_drop)
+            .sort_values(["timestamp", "market"])
+        )
+
+class GeneratorCapabilitiesFetcher(DataFetcher):
+
+    def __init__(
+        self,
+        in_dir: str = "generator_capabilities",
+        out_file: str = "generator_capabilities.parquet",
+    ):
+        def puller(*args, **kwargs):
+            return sql.read_generator_capabilities(*args, **kwargs)
+        super().__init__(in_dir, out_file, sql_interface=puller)
+
+    def process(self, df: pd.DataFrame) -> pd.DataFrame:
+        dates = ["valid_from", "valid_to", "cod"]
+        for date in dates:
+            df[date] = pd.to_datetime(df[date])
+        return df
 
 class IndexCapacityFetcher(DataFetcher):
 
@@ -465,6 +505,12 @@ def fetch_as_prices(
     else:
         raise ValueError(f"unrecognized market: '{market}'")
 
+def fetch_contracted_volumes(*args, **kwargs):
+    fetcher = ContractedVolumeFetcher()
+    df = fetcher.load(*args, **kwargs)
+    # drop the erroneously labeled 'non-spin- reserve' observations
+    return df.loc[~df.market.isin(["fmm nr", "ifm nr"]), :]
+
 def fetch_energy_prices(
     market: str = "da",
     nodal: bool = False,
@@ -501,6 +547,10 @@ def fetch_generation(kind: str = "all", *args, **kwargs) -> pd.DataFrame:
         fetcher = RenewableGenerationFetcher()
     else:
         raise ValueError(f"unrecognized generation kind: '{kind}'")
+    return fetcher.load(*args, **kwargs)
+
+def fetch_generator_capabilities(*args, **kwargs) -> pd.DataFrame:
+    fetcher = GeneratorCapabilitiesFetcher()
     return fetcher.load(*args, **kwargs)
 
 def fetch_index(norm: str = "mw", **kwargs):
