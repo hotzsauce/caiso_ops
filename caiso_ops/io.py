@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 # mapping CAISO/Modo abbreviations to display names
 MARKET_DISPLAY_NAMES = {
     "ifm": "Integrated Forward Market",
@@ -30,6 +32,7 @@ def _string_to_display(string: str) -> str:
 
 
 
+DELIMS = r"[\s;\.\-\_]"
 class CaisoFormatter(object):
 
     def __init__(self):
@@ -40,8 +43,7 @@ class CaisoFormatter(object):
 
     @staticmethod
     def format(string: str) -> str:
-        tokens = string.split()
-        return " ".join(map(_string_to_display, tokens))
+        return " ".join(map(_string_to_display, re.split(DELIMS, string)))
 
     def resolve(self, string: str) -> str:
         try:
