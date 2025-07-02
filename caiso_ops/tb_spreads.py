@@ -23,7 +23,4 @@ class TopBottomSpread(object):
         obj: np.ndarray,
     ):
         arranged = np.sort(obj)
-        # print(arranged[:self.n])
-        # print(arranged[-self.n:])
-        # print()
         return arranged[-self.n:].sum() - arranged[:self.n].sum()
