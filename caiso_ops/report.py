@@ -4,9 +4,11 @@ Creating aspects of the benchmark report
 from __future__ import annotations
 
 from functools import cached_property
+import numpy as np
 import pandas as pd
 
 import caiso_ops.data as data
+from caiso_ops.prices import negative_duration
 from caiso_ops.tb_spreads import TopBottomSpread
 
 
@@ -14,9 +16,16 @@ from caiso_ops.tb_spreads import TopBottomSpread
 class ReportData(object):
 
     @cached_property
+    def contracted_volumes(self):
+        df = data.fetch_contracted_volumes()
+        return df
+
+    @cached_property
     def da_anc(self):
         df = data.fetch_as_prices(market="da")
-        return df
+        # AS_CAISO_EXP is the price hub that factors in gen, load, and
+        # intertie nodes
+        return df.loc[df.anc_region == "AS_CAISO_EXP", :]
 
     @cached_property
     def da_energy(self):
@@ -69,25 +78,34 @@ class DriverTable(object):
     period and the 'current' period
     """
 
+    # order is important for _entries
     _entries = {
-        "Battery Revenues": "battery_revenues",
+        "Merchant Revenues": "battery_revenues",
         "TB4 Spreads": "price_spreads",
-        "Regulation Prices": "regulation_prices",
+        "Negatively Priced Hours": "negative_prices",
+        "Average Negative Price": "negative_price_magnitude",
+        "Average Negative Duration": "negative_price_duration",
+        #
         "Solar Gen.": "solar_generation",
         "Solar Peak": "solar_peak",
         "Load": "load_total",
         "Net Load": "load_net",
-        "Negatively Priced Hours": "negative_prices",
+        #
+        "Regulation Prices": "regulation_prices",
     }
 
+    # order is *not* important for _units
     _units = {
-        "Battery Revenues": "$/kW/year",
-        "Net Load": "GW",
+        "Merchant Revenues": "$/kW/year",
         "Load": "GW",
-        "Negatively Priced Hours": "No.",
-        "TB4 Spreads": "$/MWh",
+        "Net Load": "GW",
+        "Negatively Priced Hours": "No. Hours",
+        "Average Negative Price": "$/MWh",
+        "Average Negative Duration": "No. Hours",
+        "Regulation Prices": "$/MW",
         "Solar Gen.": "TWh",
         "Solar Peak": "GW",
+        "TB4 Spreads": "$/MWh",
     }
 
     def __init__(
@@ -220,6 +238,49 @@ class DriverTable(object):
         )
         return count / scale_factor
 
+    def negative_price_magnitude(
+        self,
+        start: str | pd.Timestamp,
+        end: str | pd.Timestamp,
+        market: str = "da",
+    ) -> float:
+        """
+        Compute the average price, conditional on it being a negatively
+        priced period
+        """
+        start = pd.to_datetime(start)
+        end = pd.to_datetime(end)
+
+        return (
+            self.get_price_data(market)
+            .set_index("timestamp")
+            .loc[start:end, ["lmp"]]
+            .query("lmp < 0")
+            .squeeze()
+            .mean()
+        )
+
+    def negative_price_duration(
+        self,
+        start: str | pd.Timestamp,
+        end: str | pd.Timestamp,
+        market: str = "da",
+    ) -> float:
+        """
+        Compute the daily average of the duration of negative prices
+        """
+        start = pd.to_datetime(start)
+        end = pd.to_datetime(end)
+
+        scale_factor = 1 if market == "da" else 12
+
+        prices = (
+            self.get_price_data(market)
+            .set_index("timestamp")
+            .loc[start:end, "lmp"]
+        )
+        return negative_duration(prices).mean() / scale_factor
+
     def price_spreads(
         self,
         start: str | pd.Timestamp,
@@ -254,21 +315,32 @@ class DriverTable(object):
         market: str = "da",
     ) -> float:
         """
-        Calculate the average regup and regdown prices for the period, in $/MW
+        Calculate the volume-weighted average price of the reg. down and reg. up
+        prices for the period, in $/MW. IFM volumes are used, not FMM
         """
         start = pd.to_datetime(start)
         end = pd.to_datetime(end)
 
+        volumes = (
+            self.data.contracted_volumes
+            .pivot_table(
+                index="timestamp",
+                columns="market",
+                values="volume_mw",
+                aggfunc="sum",
+            )
+            .loc[start:end, ["ifm ru", "ifm rd"]]
+            .sum()
+        )
+
         price = (
             self.get_anc_price_data(market)
             .set_index("timestamp")
-            # .loc[start:end, ["reg_up", "reg_down"]]
-            .loc[start:end, :]
+            .loc[start:end, ["reg_up", "reg_down"]]
             .mean(axis="index", numeric_only=True)
         )
-        print(price.sum())
-        return price
 
+        return np.average(price, weights=volumes)
 
     def solar_generation(
         self,
